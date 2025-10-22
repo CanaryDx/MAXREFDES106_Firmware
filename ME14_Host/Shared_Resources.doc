@@ -1,0 +1,50 @@
+PART 3: IDENTIFY SHARED RESOURCES
+
+Hardware Sharing
+
+SPI Bus:
+Used by: MAX86178 AFE driver (`Drivers/MAX86178/*`), ADXL367 accelerometer (`Drivers/ADXL367Z/regHandler_spi.c`), external MX66 flash via SPIXFC (`Drivers/MX66/*`), and Algohub sensor hub interface (`Drivers/Algohub/*`, `Drivers/SPI/spi_api.c`).
+☐ Only one function uses it (no problem)
+☑ Multiple functions use it → NEEDS MUTEX in RTOS (current bare-metal code serializes access via `ah_sh_get_spi_ownership`, but an RTOS would require a shared-bus lock).
+
+I2C Bus:
+Used by: MAX20356 PMIC/fuel gauge (`Drivers/MAX20356/*`), MAX17260 battery gauge (`Drivers/MAX17260/*`), optional MAX86178 I2C path, temperature sensors MAX30208/MAX30210 (`Drivers/MAX30208`, `Drivers/MAX30210`), ADXL367 alternate interface (`Drivers/ADXL367Z/regHandler_i2c.c`), and other GUI-issued I2C debug commands.
+☐ Only one function uses it (no problem)
+☑ Multiple functions use it → NEEDS MUTEX in RTOS (currently serialized by driver calls; RTOS tasks would need a bus guard).
+
+UART:
+Used by: Console logging/stdio (`Libraries/Boards/Source/stdio.c`, `Libraries/Boards/MRD106/Source/board.c`).
+☑ Only one function uses it (no problem)
+☐ Multiple functions use it → NEEDS MUTEX in RTOS
+
+Other peripherals:
+- USB device controller (`Drivers/USB/*`) shared between interrupt context (`USB_IRQHandler`) and application tasks. ☑ Shared → NEEDS MUTEX in RTOS for higher-level buffer management.
+- BLE timers (`ble_isr`, `SysTick_Handler`) interact with Cordio stack; Cordio already provides internal serialization.
+- FATFS/SD/Flash file writes (`app_fatfs_*` and MX66 SPI flash) reuse the SPIXFC bus; protect with filesystem mutex in RTOS.
+
+Variable Sharing
+
+List all global variables:
+
+Variable Name | Type | Size | Written By | Read By | Problem?
+---|---|---|---|---|---
+`g_app_evt` (`main.c`) | `volatile unsigned int` | 32 bits | Multiple ISRs (temp_sensor_isr, ble_isr, button callbacks, periodic_pack_isr) via `app_main_evt_post` | Main loop in `main()` and helpers | ☑ Multi-byte + shared (though 32-bit atomic on Cortex-M4, coordination still required in RTOS)
+`last_frame_time` (`Drivers/MRD106/mrd106_helper.c`) | `uint64_t` | 64 bits | `afe_int_isr`, `mrd_sensors_enable`, `apply_afe_requests` | `apply_afe_requests` | ☑ Multi-byte + shared (needs protection)
+`last_acc_execute_time` (`Drivers/MRD106/mrd106_helper.c`) | `uint64_t` | 64 bits | `apply_afe_requests`, `mrd_sensors_enable` | Main loop logic controlling accelerometer execution | ☑ Multi-byte + shared
+`m_mrd` (`main.c`) | `mrd_t*` | 32 bits | `main()` initialization | Used across application modules and ISRs (e.g., `ble_isr`, `periodic_pack_isr`) | ☐ (pointer read-after-init; ensure initialization completes before ISRs enable)
+`ble_connected` (`main.c`) | `uint8_t` | 8 bits | Main loop BLE event handlers | Other modules via status APIs | ☐ Not multi-byte; accesses confined to main context
+`gUseAcc` (`Drivers/MRD106/mrd106_helper.c`) | `uint8_t` | 8 bits | Location finder events, measurement control, AFE logic | Main loop, `apply_afe_requests` | ☐ (single byte, but ensure consistent policy under RTOS)
+`queue_algo` (`Drivers/MRD106/mrd106_helper.c`) | `queue_t` | struct | Producers (biosensor execute), consumers (`apply_afe_requests`, Algohub) | Shared between loop and callbacks | ☑ Multi-byte + shared (queue operations already use critical sections; require mutex in RTOS)
+`msgQueue`, `adapReportQueue` (`main.c`) | `queue_t` | struct | Sensor execution routines, BLE dispatcher, flash logger | Multiple contexts | ☑ Multi-byte + shared (protect enqueue/dequeue)
+
+Add as many tables as required
+
+⚠️ If "Multi-byte + shared" is checked → NEEDS PROTECTION in RTOS
+
+Data Dependencies
+
+1. `temp_sensor_isr` → `g_app_evt` → main loop (`EVT_TEMP_SENSOR_SAMPLE`) → `temp->execute_once()` → `format_data_temp` → `msgQueue`.
+2. `afe_int_isr` → `last_frame_time` → `apply_afe_requests` → sensor configuration functions (`max86178_set_*`) → impacts `biosensor->execute_once()` data stream → `adapter_execute_push`.
+3. `pmic_mpc_isr` → USB power state → `usb_dev_init`/`usb_dev_deinit` → `usb_event_handler` → GUI/application USB communication.
+
+In RTOS deployments, guard all marked shared resources with mutexes or critical sections to prevent race conditions.

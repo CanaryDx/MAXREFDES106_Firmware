@@ -1,0 +1,152 @@
+PART 2: UNDERSTAND YOUR INTERRUPTS
+
+ISR Inventory
+
+ISR #1: HardFault_Handler (main.c:638)
+What triggers it?
+ ☐ Timer ☐ UART RX ☐ External pin ☐ ADC complete ☑ Other: CPU fault
+What does the ISR do? (describe in detail)
+ Forces a system reset sequence via GCR reset register, dumps CFSR/BFAR using pr_info, then spins forever.
+How long does it take? Not measured; fault handler halts execution.
+Does it set a flag? ☐ Yes:  ☐ No ☑ N/A (system reset loop)
+Does it modify data? ☐ Yes:  ☑ No (only hardware registers)
+Does it call functions? ☑ Yes: pr_info
+⚠️ CRITICAL: Does it do any of these? (check all)
+☑ Long processing (> 100μs) ☑ Busy-wait delays ☑ printf/logging ☐ Math operations ☑ Multiple function calls (register writes + pr_info)
+
+ISR #2: SysTick_Handler (Drivers/BLE/ble_api.c:297)
+What triggers it?
+ ☑ Timer ☐ UART RX ☐ External pin ☐ ADC complete ☐ Other: 
+What does the ISR do? (describe in detail)
+ Calls WsfTimerUpdate to advance the Cordio BLE stack timer.
+How long does it take? Not measured; expected < 10 μs.
+Does it set a flag? ☐ Yes:  ☑ No
+Does it modify data? ☑ Yes: WSF timer state (inside library)
+Does it call functions? ☑ Yes: WsfTimerUpdate
+⚠️ CRITICAL: Does it do any of these? (check all)
+☐ Long processing (> 100μs) ☐ Busy-wait delays ☐ printf/logging ☐ Math operations ☐ Multiple function calls
+
+ISR #3: NMI_Handler (Libraries/Boards/MRD106/Source/board.c:179)
+What triggers it?
+ ☐ Timer ☐ UART RX ☐ External pin ☐ ADC complete ☑ Other: NMI vector
+What does the ISR do? (describe in detail)
+ Executes a single no-operation instruction and returns.
+How long does it take? ≈ 1 μs
+Does it set a flag? ☐ Yes:  ☑ No
+Does it modify data? ☐ Yes:  ☑ No
+Does it call functions? ☐ Yes:  ☑ No
+⚠️ CRITICAL: Does it do any of these? (check all)
+☐ Long processing (> 100μs) ☐ Busy-wait delays ☐ printf/logging ☐ Math operations ☐ Multiple function calls
+
+ISR #4: temp_sensor_isr (Drivers/MRD106/mrd106_isr.c:18)
+What triggers it?
+ ☑ Timer ☐ UART RX ☐ External pin ☐ ADC complete ☐ Other: 
+What does the ISR do? (describe in detail)
+ Clears the temperature timer interrupt and posts EVT_TEMP_SENSOR_SAMPLE via app_main_evt_post.
+How long does it take? Not measured; expected < 20 μs.
+Does it set a flag? ☑ Yes: g_app_evt |= EVT_TEMP_SENSOR_SAMPLE
+Does it modify data? ☑ Yes: modifies event bitfield.
+Does it call functions? ☑ Yes: TMR_IntClear, app_main_evt_post
+⚠️ CRITICAL: Does it do any of these? (check all)
+☐ Long processing (> 100μs) ☐ Busy-wait delays ☐ printf/logging ☐ Math operations ☑ Multiple function calls
+
+ISR #5: ble_isr (Drivers/MRD106/mrd106_isr.c:24)
+What triggers it?
+ ☑ Timer ☐ UART RX ☐ External pin ☐ ADC complete ☐ Other: 
+What does the ISR do? (describe in detail)
+ Clears BLE timer interrupt and marks BLE transmission ready by setting mrd->setBleSentEvt(1).
+How long does it take? Not measured; expected < 20 μs.
+Does it set a flag? ☑ Yes: mrd->setBleSentEvt(1)
+Does it modify data? ☑ Yes: updates MRD state.
+Does it call functions? ☑ Yes: TMR_IntClear, getMRD, setBleSentEvt
+⚠️ CRITICAL: Does it do any of these? (check all)
+☐ Long processing (> 100μs) ☐ Busy-wait delays ☐ printf/logging ☐ Math operations ☑ Multiple function calls
+
+ISR #6: led_isr (Drivers/MRD106/mrd106_isr.c:30)
+What triggers it?
+ ☑ Timer ☐ UART RX ☐ External pin ☐ ADC complete ☐ Other: 
+What does the ISR do? (describe in detail)
+ Clears LED timer interrupt and updates LED patterns via app_led_timer_handle.
+How long does it take? Not measured; expected < 20 μs.
+Does it set a flag? ☐ Yes:  ☑ No
+Does it modify data? ☑ Yes: LED driver state (through handler)
+Does it call functions? ☑ Yes: TMR_IntClear, app_led_timer_handle
+⚠️ CRITICAL: Does it do any of these? (check all)
+☐ Long processing (> 100μs) ☐ Busy-wait delays ☐ printf/logging ☐ Math operations ☑ Multiple function calls
+
+ISR #7: periodic_pack_isr (Drivers/MRD106/mrd106_isr.c:36)
+What triggers it?
+ ☑ Timer ☐ UART RX ☐ External pin ☐ ADC complete ☐ Other: 
+What does the ISR do? (describe in detail)
+ Clears periodic packet timer and, when streaming is active, raises EVT_PERIODICDATAREADY through adapter_set_event.
+How long does it take? Not measured; expected < 25 μs.
+Does it set a flag? ☑ Yes: triggers adapter_set_event
+Does it modify data? ☑ Yes: updates adapter event queue.
+Does it call functions? ☑ Yes: TMR_IntClear, getMRD, adapter_set_event
+⚠️ CRITICAL: Does it do any of these? (check all)
+☐ Long processing (> 100μs) ☐ Busy-wait delays ☐ printf/logging ☐ Math operations ☑ Multiple function calls
+ 
+ISR #8: pmic_mpc_isr (Drivers/MRD106/mrd106_isr.c:42)
+What triggers it?
+ ☐ Timer ☐ UART RX ☑ External pin ☐ ADC complete ☐ Other: 
+What does the ISR do? (describe in detail)
+ Services PMIC USB detect interrupt: reads interrupt/status registers, toggles USB power, initializes/deinitializes USB stack, updates isUsbPresent, then clears GPIO interrupt.
+How long does it take? Not measured; may exceed 100 μs due to I2C/USB handling.
+Does it set a flag? ☐ Yes:  ☑ No
+Does it modify data? ☑ Yes: static isUsbPresent, USB subsystem state.
+Does it call functions? ☑ Yes: multiple max20356_* APIs, usb_dev_init/deinit, GPIO_IntClr
+⚠️ CRITICAL: Does it do any of these? (check all)
+☑ Long processing (> 100μs) ☐ Busy-wait delays ☑ printf/logging (indirect via USB init callbacks) ☑ Math operations (minor register masking) ☑ Multiple function calls
+
+
+ISR #9: afe_int_isr (Drivers/MRD106/mrd106_isr.c:62)
+What triggers it?
+ ☐ Timer ☐ UART RX ☑ External pin ☐ ADC complete ☐ Other: 
+What does the ISR do? (describe in detail)
+ Captures timestamp of latest MAX86178 frame (updates last_frame_time) and clears the AFE GPIO interrupt.
+How long does it take? Not measured; expected < 15 μs.
+Does it set a flag? ☐ Yes:  ☑ No
+Does it modify data? ☑ Yes: updates last_frame_time (global)
+Does it call functions? ☑ Yes: utils_get_time_ms, GPIO_IntClr
+⚠️ CRITICAL: Does it do any of these? (check all)
+☐ Long processing (> 100μs) ☐ Busy-wait delays ☐ printf/logging ☐ Math operations ☑ Multiple function calls
+
+ISR #10: USB_IRQHandler (Drivers/USB/usb_api.c:285)
+What triggers it?
+ ☐ Timer ☐ UART RX ☐ External pin ☐ ADC complete ☑ Other: USB controller interrupt
+What does the ISR do? (describe in detail)
+ Delegates to usb_event_handler to process USB device events and endpoint traffic.
+How long does it take? Not measured; depends on USB stack workload.
+Does it set a flag? ☐ Yes:  ☑ No (flags managed inside stack)
+Does it modify data? ☑ Yes: USB stack state.
+Does it call functions? ☑ Yes: usb_event_handler
+⚠️ CRITICAL: Does it do any of these? (check all)
+☑ Long processing (> 100μs) ☐ Busy-wait delays ☐ printf/logging ☐ Math operations ☑ Multiple function calls
+
+ISR #11: GPIO0_IRQHandler / GPIO1_IRQHandler / GPIO2_IRQHandler / GPIO3_IRQHandler (Drivers/Button/button.c & Libraries/Boards/Source/pb.c)
+What triggers it?
+ ☐ Timer ☐ UART RX ☑ External pin ☐ ADC complete ☐ Other: GPIO interrupt (buttons, PMIC, AFE, etc.)
+What does the ISR do? (describe in detail)
+ Each handler forwards to GPIO_Handler(PORT_x), which dispatches registered callbacks for the relevant port pins.
+How long does it take? Not measured; depends on number of callbacks (typically < 30 μs).
+Does it set a flag? ☑ Yes: indirectly via registered callbacks (e.g., button events)
+Does it modify data? ☑ Yes: callback logic updates state/event queues.
+Does it call functions? ☑ Yes: GPIO_Handler and subsequent callback chain
+⚠️ CRITICAL: Does it do any of these? (check all)
+☐ Long processing (> 100μs) ☐ Busy-wait delays ☐ printf/logging ☐ Math operations ☑ Multiple function calls
+
+ISR #12: Button callback chain (button.c)
+What triggers it?
+ External GPIO interrupt on configured button pins.
+What does the ISR do? (describe in detail)
+ GPIO_Handler invokes the button module''s callback, which debounces input, updates press counters, and calls single/double/triple/long helpers that post EVT_BUTTON_* bits to g_app_evt via app_main_evt_post.
+How long does it take? Not measured; expected < 40 microseconds.
+Does it set a flag? Yes: sets EVT_BUTTON_SINGLE_PRESS / EVT_BUTTON_DOUBLE_PRESS / EVT_BUTTON_TRIPLE_PRESS / EVT_BUTTON_LONG_PRESS.
+Does it modify data? Yes: maintains button state-machine variables.
+Does it call functions? Yes: button_timer_timeout and single_press/double_press/triple_press/long_press, which call app_main_evt_post.
+CRITICAL checks:
+ - Long processing (>100us): No
+ - Busy-wait delays: No
+ - printf/logging: No
+ - Math operations: No
+ - Multiple function calls: Yes
